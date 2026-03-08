@@ -132,19 +132,42 @@ print("Step B: Defining Access Rules (Clusters)...")
 unique_roles = df_identities[['department', 'job_title']].drop_duplicates()
 role_entitlement_map = {}
 
-# Pre-fetch entitlement IDs
-all_ent_ids = df_entitlements['entitlement_id'].values
+# Group entitlements by resource to ensure accounts get multiple entitlements
+ents_by_resource = df_entitlements.groupby('resource_id')['entitlement_id'].apply(list).to_dict()
+all_resource_ids = list(ents_by_resource.keys())
 
 for idx, row in unique_roles.iterrows():
     dept = row['department']
     title = row['job_title']
     key = (dept, title)
     
-    # Determine number of entitlements for this role
-    num_ents = np.random.randint(5, 21)
+    # Strategy: Select a few resources for this role, and assign multiple entitlements within those resources.
+    # This avoids the "1 entitlement per account" skew.
     
-    # Select entitlements
-    assigned_ents = np.random.choice(all_ent_ids, num_ents, replace=False)
+    # Select 3-8 resources for this role
+    num_resources = np.random.randint(3, 9)
+    selected_resources = np.random.choice(all_resource_ids, num_resources, replace=False)
+    
+    assigned_ents = []
+    for res_id in selected_resources:
+        avail_ents = ents_by_resource[res_id]
+        n_avail = len(avail_ents)
+        
+        # Determine how many to pick (aim for >1 if possible)
+        if n_avail <= 1:
+            to_pick = 1
+        else:
+            # Pick between 2 and all available, or at least 50%
+            # Let's try to pick 2 to 5, or all if less than 5
+            upper_bound = min(n_avail, 5)
+            if upper_bound < 2:
+                to_pick = 1
+            else:
+                to_pick = np.random.randint(2, upper_bound + 1)
+        
+        picked = np.random.choice(avail_ents, to_pick, replace=False)
+        assigned_ents.extend(picked)
+    
     role_entitlement_map[key] = assigned_ents
 
 print(f"  - Defined access rules for {len(role_entitlement_map)} unique roles.")
@@ -181,7 +204,7 @@ df_accounts_needed['status'] = 'Active'
 df_identity_access = df_identity_access.merge(df_accounts_needed, on=['identity_id', 'resource_id'])
 
 # Prepare Account_Entitlement table
-df_account_entitlement = df_identity_access[['account_id', 'entitlement_id']].copy()
+df_account_entitlement = df_identity_access[['identity_id', 'account_id', 'entitlement_id']].copy()
 df_account_entitlement['grant_date'] = [fake.date_between(start_date='-2y', end_date='today') for _ in range(len(df_account_entitlement))]
 df_account_entitlement['assignment_type'] = 'Birthright'
 
@@ -197,8 +220,14 @@ anomaly_identities = np.random.choice(df_identities['identity_id'], num_anomalie
 anomaly_records = []
 for identity_id in anomaly_identities:
     # Assign 1-3 random extra entitlements
-    num_extra = np.random.randint(1, 4)
-    extra_ents = np.random.choice(all_ent_ids, num_extra)
+    # Pick a random resource
+    res_id = np.random.choice(all_resource_ids)
+    avail_ents = ents_by_resource[res_id]
+    
+    # Pick 1-3 entitlements from this resource
+    n_avail = len(avail_ents)
+    to_pick = np.random.randint(1, min(4, n_avail + 1))
+    extra_ents = np.random.choice(avail_ents, to_pick, replace=False)
     
     for ent_id in extra_ents:
         anomaly_records.append({
@@ -231,7 +260,7 @@ if num_new_accs > 0:
     df_accounts_needed = pd.concat([df_accounts_needed, new_accounts_df], ignore_index=True)
 
 # Prepare Anomaly Account_Entitlements
-df_anomaly_entitlements = df_anomalies[['account_id', 'entitlement_id', 'assignment_type']].copy()
+df_anomaly_entitlements = df_anomalies[['identity_id', 'account_id', 'entitlement_id', 'assignment_type']].copy()
 df_anomaly_entitlements['grant_date'] = [fake.date_between(start_date='-6m', end_date='today') for _ in range(len(df_anomaly_entitlements))]
 
 # Combine Normal and Anomaly Entitlements
@@ -262,31 +291,65 @@ df_final_account_entitlements.to_parquet(os.path.join(OUTPUT_DIR, "account_entit
 
 # Entitlement Groups
 print("  - Generating Entitlement Groups...")
-num_groups = 500
+# Strategy: 
+# 1. Create Department-based groups (Birthright)
+# 2. Create Project/Role-based groups (Ad-hoc)
+
+dept_group_names = [f"Group_{dept}" for dept in departments]
+num_general_groups = 500 - len(dept_group_names)
+if num_general_groups < 100: num_general_groups = 400 # Ensure we have enough
+general_group_names = [f"Group_Project_{fake.word().capitalize()}_{i}" for i in range(num_general_groups)]
+
+all_group_names = dept_group_names + general_group_names
 df_ent_groups = pd.DataFrame({
-    'ent_group_id': [str(uuid.uuid4()) for _ in range(num_groups)],
-    'group_name': [f"Group_{fake.word()}_{i}" for i in range(num_groups)],
-    'description': [fake.sentence() for _ in range(num_groups)],
-    'owner_id': np.random.choice(df_identities['identity_id'], num_groups)
+    'ent_group_id': [str(uuid.uuid4()) for _ in range(len(all_group_names))],
+    'group_name': all_group_names,
+    'description': [fake.sentence() for _ in range(len(all_group_names))],
+    'owner_id': np.random.choice(df_identities['identity_id'], len(all_group_names))
 })
 df_ent_groups.to_parquet(os.path.join(OUTPUT_DIR, "entitlement_groups.parquet"))
 
+# Map Dept Name -> Group ID
+dept_group_map = dict(zip(departments, df_ent_groups.head(len(departments))['ent_group_id']))
+general_group_ids = df_ent_groups.tail(num_general_groups)['ent_group_id'].values
+
 # Entitlement_Group_Assignment
 print("  - Generating Entitlement Group Assignments...")
-group_ids = df_ent_groups['ent_group_id'].values
-num_assignments = 20000
-assigned_ids = np.random.choice(df_identities['identity_id'], num_assignments)
-assigned_groups = np.random.choice(group_ids, num_assignments)
 
-df_ent_group_assignment = pd.DataFrame({
-    'identity_id': assigned_ids,
+# 1. Birthright Assignments (Department Groups)
+df_dept_assignments = df_identities[['identity_id', 'department']].copy()
+df_dept_assignments['ent_group_id'] = df_dept_assignments['department'].map(dept_group_map)
+df_dept_assignments['assignment_status'] = 'Active'
+df_dept_assignments = df_dept_assignments[['identity_id', 'ent_group_id', 'assignment_status']]
+
+# 2. Ad-hoc/Project Assignments
+# Use a Poisson distribution to determine how many extra groups each user has.
+# Lambda=3 means average user has 3 extra groups.
+counts = np.random.poisson(lam=3, size=NUM_IDENTITIES)
+
+# Generate the assignments
+# Repeat identity IDs based on counts
+repeated_ids = np.repeat(df_identities['identity_id'].values, counts)
+# Assign random general groups
+assigned_groups = np.random.choice(general_group_ids, size=len(repeated_ids))
+
+df_random_assignments = pd.DataFrame({
+    'identity_id': repeated_ids,
     'ent_group_id': assigned_groups,
     'assignment_status': 'Active'
 })
+
+# Combine
+df_ent_group_assignment = pd.concat([df_dept_assignments, df_random_assignments], ignore_index=True)
+
+# Deduplicate (user might get assigned same group twice randomly, though unlikely to match dept group often)
+df_ent_group_assignment.drop_duplicates(subset=['identity_id', 'ent_group_id'], inplace=True)
+
 df_ent_group_assignment.to_parquet(os.path.join(OUTPUT_DIR, "entitlement_group_assignments.parquet"))
 
 # Entitlement_Group_Relation
 print("  - Generating Entitlement Group Relations...")
+group_ids = df_ent_groups['ent_group_id'].values
 num_relations = 100
 parents = np.random.choice(group_ids, num_relations)
 children = np.random.choice(group_ids, num_relations)
