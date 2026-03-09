@@ -146,7 +146,7 @@ for res_id in resource_ids:
             'resource_id': res_id,
             'entitlement_name': f"Ent_{fake.word().upper()}_{np.random.randint(1000, 9999)}",
             'is_requestable': np.random.choice([True, False]),
-            'risk_level': np.random.choice(['Low', 'Medium', 'High'], p=[0.6, 0.3, 0.1])
+            'owner_id': np.random.choice(df_identities['identity_id'])
         })
 
 df_entitlements = pd.DataFrame(entitlements)
@@ -298,8 +298,8 @@ group_entitlements = []
 all_ent_ids = df_entitlements['entitlement_id'].values
 
 # 1. Root Group -> Basic Birthright (e.g., Intranet access)
-# Pick 2-3 low risk entitlements
-basic_ents = df_entitlements[df_entitlements['risk_level'] == 'Low']['entitlement_id'].sample(3).values
+# Pick 2-3 random entitlements
+basic_ents = np.random.choice(all_ent_ids, 3, replace=False)
 for eid in basic_ents:
     group_entitlements.append({'ent_group_id': root_group_id, 'entitlement_id': eid})
 
