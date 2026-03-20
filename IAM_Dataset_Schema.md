@@ -8,6 +8,7 @@ Represents the users (employees, contractors, service accounts) within the organ
 | Column Name | Data Type | Description |
 |---|---|---|
 | `identity_id` | String (UUID) | Unique identifier for the identity. |
+| `identity_name` | String | Full name of the human user or name of the service account. |
 | `identity_type` | String | Type of identity (e.g., 'Human', 'Service Account'). |
 | `status` | String | Employment status (e.g., 'Active', 'Inactive', 'Leave'). |
 | `location` | String | Physical location or office of the identity. |

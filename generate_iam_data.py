@@ -48,9 +48,13 @@ job_titles_map = {
 
 # 2. Generate Identities
 print("  - Generating Identities...")
+identity_types = np.random.choice(['Human', 'Service Account'], NUM_IDENTITIES, p=[0.95, 0.05])
+identity_names = [fake.name() if t == 'Human' else f"svc_{fake.word()}_{np.random.randint(100, 999)}" for t in identity_types]
+
 identities_data = {
     'identity_id': [str(uuid.uuid4()) for _ in range(NUM_IDENTITIES)],
-    'identity_type': np.random.choice(['Human', 'Service Account'], NUM_IDENTITIES, p=[0.95, 0.05]),
+    'identity_name': identity_names,
+    'identity_type': identity_types,
     'status': np.random.choice(['Active', 'Inactive', 'Leave'], NUM_IDENTITIES, p=[0.90, 0.05, 0.05]),
     'location': [fake.city() for _ in range(NUM_IDENTITIES)],
     'cost_center': [fake.bothify(text='CC-####') for _ in range(NUM_IDENTITIES)]
